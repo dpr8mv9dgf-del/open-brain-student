@@ -23,6 +23,8 @@
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #333; flex-shrink: 0; transition: background 0.3s; }
     .dot.connected { background: #22c55e; }
     .dot.error { background: #ef4444; }
+    .signout { background: none; border: none; color: #666; font-size: 0.75rem; cursor: pointer; margin-left: auto; font-family: inherit; display: none; }
+    .signout:hover { color: #aaa; text-decoration: underline; }
 
     .banner {
       background: #1a0a0a; border: 1px solid #3a1515; border-radius: 10px;
@@ -30,6 +32,8 @@
       color: #f87171; line-height: 1.6; display: none;
     }
     .banner code { background: #2a1010; padding: 1px 6px; border-radius: 4px; font-size: 0.8rem; font-family: monospace; }
+
+    .login { max-width: 380px; margin: 32px auto 0; display: none; }
 
     .tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
     .tab {
@@ -50,16 +54,15 @@
       border-radius: 8px; padding: 12px 14px; font-size: 0.8rem; line-height: 1.5; margin-bottom: 12px;
     }
 
-    textarea, input[type="text"] {
+    textarea, input[type="text"], input[type="password"] {
       width: 100%; background: #0f0f0f; border: 1px solid #252525; border-radius: 8px;
       color: #e5e5e5; font-size: 0.95rem; padding: 12px 14px; font-family: inherit;
       outline: none; transition: border-color 0.2s; line-height: 1.5;
     }
     textarea { resize: vertical; min-height: 120px; }
-    input[type="text"] { margin-bottom: 10px; }
-    textarea:focus, input[type="text"]:focus { border-color: #6366f1; }
+    input[type="text"], input[type="password"] { margin-bottom: 10px; }
+    textarea:focus, input[type="text"]:focus, input[type="password"]:focus { border-color: #6366f1; }
     textarea::placeholder, input::placeholder { color: #444; }
-    textarea + .row, input + .row { margin-top: 12px; }
     .row { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 
     .btn {
@@ -124,10 +127,25 @@
     <div class="status">
       <div class="dot" id="dot"></div>
       <span id="statusText">Connecting...</span>
+      <button class="signout" id="signOut">Sign out</button>
     </div>
   </header>
 
   <div class="banner" id="banner"></div>
+
+  <!-- LOGIN -->
+  <div class="card login" id="loginView">
+    <h2>Sign in to your brain</h2>
+    <div class="help">Your brain is private. Sign in with the email and password you created in Supabase.</div>
+    <input type="text" id="loginEmail" autocomplete="email" inputmode="email" placeholder="Email">
+    <input type="password" id="loginPass" autocomplete="current-password" placeholder="Password">
+    <div class="row">
+      <button class="btn" id="loginBtn">Sign in</button>
+      <span class="save-msg" id="loginMsg"></span>
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
 
   <nav class="tabs">
     <button class="tab active" data-tab="voice">🎤 Voice</button>
@@ -253,6 +271,7 @@
     <div id="list"><div class="empty">Loading...</div></div>
   </section>
 
+  </div><!-- /app -->
 </div>
 
 <script>
@@ -268,7 +287,7 @@
     })
   }
 
-  // ---------- Connection ----------
+  // ---------- Connection + login ----------
   function showBanner(html) {
     const b = $('banner')
     b.innerHTML = html
@@ -276,6 +295,61 @@
     $('dot').className = 'dot error'
     $('statusText').textContent = 'Not connected'
   }
+
+  function showLogin() {
+    $('app').style.display = 'none'
+    $('loginView').style.display = 'block'
+    $('signOut').style.display = 'none'
+    $('dot').className = 'dot'
+    $('statusText').textContent = 'Please sign in'
+  }
+
+  async function startApp() {
+    $('loginView').style.display = 'none'
+    $('app').style.display = 'block'
+    $('signOut').style.display = 'inline'
+    $('banner').style.display = 'none'
+    try {
+      const { error } = await db.from('thoughts').select('id').limit(1)
+      if (error) throw error
+      $('dot').className = 'dot connected'
+      $('statusText').textContent = 'Connected to your database'
+      await load()
+    } catch (e) {
+      showBanner('Could not connect to your database.<br><br>Error: <code>' + esc(e.message) + '</code><br><br>Check that your URL and anon key in <code>config.js</code> are correct and that you ran the migration SQL in Supabase.')
+      $('list').innerHTML = ''
+    }
+  }
+
+  async function signIn() {
+    const email = $('loginEmail').value.trim()
+    const password = $('loginPass').value
+    const msg = $('loginMsg')
+    msg.className = 'save-msg'
+    msg.textContent = ''
+    if (!email || !password) { msg.textContent = 'Enter your email and password'; msg.className = 'save-msg err'; return }
+    $('loginBtn').disabled = true
+    try {
+      const { error } = await db.auth.signInWithPassword({ email, password })
+      if (error) throw error
+      $('loginPass').value = ''
+      await startApp()
+    } catch (e) {
+      msg.textContent = '✗ ' + e.message
+      msg.className = 'save-msg err'
+    } finally {
+      $('loginBtn').disabled = false
+    }
+  }
+
+  async function signOut() {
+    await db.auth.signOut()
+    showLogin()
+  }
+
+  $('loginBtn').addEventListener('click', signIn)
+  $('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') signIn() })
+  $('signOut').addEventListener('click', signOut)
 
   async function init() {
     if (typeof SUPABASE_URL === 'undefined' || SUPABASE_URL.includes('PASTE_YOUR')) {
@@ -285,14 +359,13 @@
     }
     try {
       db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-      const { error } = await db.from('thoughts').select('id').limit(1)
-      if (error) throw error
-      $('dot').className = 'dot connected'
-      $('statusText').textContent = 'Connected to your database'
-      await load()
+      // If the session ends (expired or signed out elsewhere), go back to the login screen.
+      db.auth.onAuthStateChange(event => { if (event === 'SIGNED_OUT') showLogin() })
+      const { data } = await db.auth.getSession()
+      if (data && data.session) await startApp()
+      else showLogin()
     } catch (e) {
-      showBanner('Could not connect to your database.<br><br>Error: <code>' + esc(e.message) + '</code><br><br>Check that your URL and anon key in <code>config.js</code> are correct and that you ran the migration SQL in Supabase.')
-      $('list').innerHTML = ''
+      showBanner('Could not start the app.<br><br>Error: <code>' + esc(e.message) + '</code>')
     }
   }
 
